@@ -1,106 +1,67 @@
-import os
-import time
-import sqlite3
-import requests
+import discord
 import feedparser
-from dotenv import load_dotenv
+import requests
 from bs4 import BeautifulSoup
+import asyncio
 
-load_dotenv()
+TOKEN = "SEU_TOKEN_AQUI"
+CHANNEL_ID = 123456789012345678  # id do canal
 
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-DISCORD_USERNAME = os.getenv("DISCORD_USERNAME", "Gaming News")
-RSS_URL = os.getenv("RSS_URL")
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SECONDS", 300))
-MAX_POSTS = int(os.getenv("MAX_POSTS_PER_CYCLE", 4))
-DELAY = int(os.getenv("DELAY_BETWEEN_POSTS_SECONDS", 3))
-SQLITE_PATH = os.getenv("SQLITE_PATH", "data/state.db")
-USER_AGENT = os.getenv("USER_AGENT", "OracleBot")
+RSS_URL = "https://www.gamespot.com/feeds/news/"
 
-DEFAULT_IMAGE = "https://upload.wikimedia.org/wikipedia/commons/2/2a/GameSpot_logo.svg"
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
 
-os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
-
-conn = sqlite3.connect(SQLITE_PATH)
-cur = conn.cursor()
-cur.execute("""
-CREATE TABLE IF NOT EXISTS posted (
-    id TEXT PRIMARY KEY
-)
-""")
-conn.commit()
-
-headers = {"User-Agent": USER_AGENT}
-
-
-def already_posted(entry_id):
-    cur.execute("SELECT 1 FROM posted WHERE id = ?", (entry_id,))
-    return cur.fetchone() is not None
-
-
-def mark_posted(entry_id):
-    cur.execute("INSERT OR IGNORE INTO posted VALUES (?)", (entry_id,))
-    conn.commit()
-
-
-def extract_image_from_page(url):
+def get_image_from_article(url):
     try:
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         og = soup.find("meta", property="og:image")
         if og:
             return og["content"]
     except:
-        pass
-    return DEFAULT_IMAGE
+        return None
 
+def clean_html(text):
+    soup = BeautifulSoup(text, "html.parser")
+    return soup.get_text()
 
-def send_embed(entry):
-    image_url = extract_image_from_page(entry.link)
+async def post_news():
+    await client.wait_until_ready()
+    channel = client.get_channel(CHANNEL_ID)
+    posted = set()
 
-    embed = {
-        "title": entry.title,
-        "url": entry.link,
-        "description": entry.summary[:300] + "...",
-        "color": 0x00ff9f,
-        "image": {"url": image_url},
-        "footer": {"text": "GameSpot"}
-    }
-
-    payload = {
-        "username": DISCORD_USERNAME,
-        "embeds": [embed]
-    }
-
-    r = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=10)
-    if r.status_code not in (200, 204):
-        print("Erro ao enviar:", r.status_code, r.text)
-    else:
-        print("Posted:", entry.title)
-
-
-def main():
-    print("Bot iniciado...")
     while True:
         feed = feedparser.parse(RSS_URL)
-        count = 0
 
-        for entry in feed.entries:
-            entry_id = entry.get("id") or entry.get("link")
-            if already_posted(entry_id):
+        for entry in feed.entries[:5]:
+            if entry.link in posted:
                 continue
 
-            send_embed(entry)
-            mark_posted(entry_id)
-            count += 1
+            title = entry.title
+            description = clean_html(entry.summary)
+            link = entry.link
+            image_url = get_image_from_article(link)
 
-            if count >= MAX_POSTS:
-                break
+            embed = discord.Embed(
+                title=title,
+                description=description[:300] + "...",
+                url=link,
+                color=0x5865F2
+            )
 
-            time.sleep(DELAY)
+            if image_url:
+                embed.set_image(url=image_url)
 
-        time.sleep(CHECK_INTERVAL)
+            await channel.send(embed=embed)
+            posted.add(entry.link)
 
+        await asyncio.sleep(900)  # 15 minutos
 
-if __name__ == "__main__":
-    main()
+@client.event
+async def on_ready():
+    print("Bot online:", client.user)
+    client.loop.create_task(post_news())
+
+client.run(TOKEN)
