@@ -4,6 +4,7 @@ import sqlite3
 import requests
 import feedparser
 from dotenv import load_dotenv
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
@@ -42,10 +43,20 @@ def mark_posted(entry_id):
     conn.commit()
 
 
+def extract_image_from_page(url):
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        og = soup.find("meta", property="og:image")
+        if og:
+            return og["content"]
+    except:
+        pass
+    return DEFAULT_IMAGE
+
+
 def send_embed(entry):
-    image_url = DEFAULT_IMAGE
-    if "media_thumbnail" in entry:
-        image_url = entry.media_thumbnail[0].get("url", DEFAULT_IMAGE)
+    image_url = extract_image_from_page(entry.link)
 
     embed = {
         "title": entry.title,
